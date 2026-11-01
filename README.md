@@ -79,6 +79,12 @@ Com uma segunda, parametrize por input ou matrix.
 Objetos Kubernetes vão por Helm. Node pool, rede, ACR, Key Vault e identidades
 são recursos Azure e só o Terraform alcança.
 
+A identidade de deploy tem `Azure Kubernetes Service RBAC Writer` com escopo no
+cluster: ela escreve objetos de aplicação em qualquer namespace, e não tem
+`namespaces/write`, CRD nem Role/RoleBinding. Namespaces e add-ons vêm do
+`terraform/cluster/prod`, aplicado com a identidade do operador — então o CI
+não consegue criar namespace nem escalar o próprio privilégio.
+
 ## Segredos
 
 Cada release tem **um** segredo no Key Vault, com um objeto JSON dentro. O

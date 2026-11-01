@@ -170,8 +170,16 @@ resource "azurerm_role_assignment" "github_deploy_acr_pull" {
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_role_assignment" "github_deploy_simplaca_writer" {
-  scope                = "${azurerm_kubernetes_cluster.main.id}/namespaces/simplaca"
+# Escopo no cluster, nao num namespace: o CI publica qualquer release deste
+# repositorio sem precisar de um role assignment novo por produto.
+#
+# RBAC Writer cobre Deployment, Service, Ingress, HPA, Secret, ConfigMap, Job,
+# PVC, PDB e ServiceAccount em todos os namespaces, e deliberadamente NAO
+# cobre namespaces/write, CRDs nem Role/RoleBinding -- entao o CI nao cria
+# namespace nem escala o proprio privilegio. Namespaces e add-ons vem do
+# terraform/cluster/prod, aplicado com a identidade do operador.
+resource "azurerm_role_assignment" "github_deploy_cluster_writer" {
+  scope                = azurerm_kubernetes_cluster.main.id
   role_definition_name = "Azure Kubernetes Service RBAC Writer"
   principal_id         = azurerm_user_assigned_identity.github_deploy.principal_id
   principal_type       = "ServicePrincipal"
