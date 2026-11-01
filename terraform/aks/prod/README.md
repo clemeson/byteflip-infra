@@ -14,12 +14,14 @@ terraform apply aks.tfplan
 terraform output kubeconfig_command
 ```
 
-O AKS e o ACR têm `prevent_destroy`; removê-los exige uma alteração explícita
-e revisão do código.
+O AKS tem `prevent_destroy`; removê-lo exige uma alteração explícita e
+revisão do código. O ACR não tem mais: mudar a região de um registry força
+recriação, e `prevent_destroy` impediria até o `plan`.
 
-O ACR e as identidades do GitHub permanecem em `personal-aks-prod`, na região
-Brazil South. O cluster, a rede e a identidade do plano de controle ficam em
-`personal-aks-eastus2-prod`, na região East US 2. O pool de sistema usa dois
+Todos os recursos ficam em `personal-aks-eastus2-prod`, na região East US 2:
+cluster, rede, identidade do plano de controle, ACR e as identidades OIDC do
+GitHub. Uma região só evita pull de imagem entre regiões e egresso cobrado
+entre o ACR e os nós. O pool de sistema usa dois
 nós `Standard_D2as_v7` (2 vCPU e 8 GiB cada), sem autoscaling. Eles consomem
 os 4 vCPU de quota regional disponíveis na assinatura. A criação do cluster
 em East US 2 com esse pool foi aceita pela API do AKS. Um terceiro nó ou um

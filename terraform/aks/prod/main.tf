@@ -8,15 +8,12 @@ locals {
 
 data "azurerm_client_config" "current" {}
 
-resource "azurerm_resource_group" "main" {
+# Endereco Terraform mantido como "aks" de proposito: ele ja aponta para
+# personal-aks-eastus2-prod no state. Renomear o endereco exigiria
+# terraform state mv num RG que contem o cluster com prevent_destroy.
+resource "azurerm_resource_group" "aks" {
   name     = var.resource_group_name
   location = var.location
-  tags     = local.tags
-}
-
-resource "azurerm_resource_group" "aks" {
-  name     = var.aks_resource_group_name
-  location = var.aks_location
   tags     = local.tags
 }
 
@@ -51,21 +48,17 @@ resource "azurerm_role_assignment" "aks_network" {
 
 resource "azurerm_container_registry" "main" {
   name                = var.acr_name
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.aks.name
+  location            = azurerm_resource_group.aks.location
   sku                 = "Basic"
   admin_enabled       = false
   tags                = local.tags
-
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 resource "azurerm_user_assigned_identity" "github_build" {
   name                = "${var.cluster_name}-github-build"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.aks.name
+  location            = azurerm_resource_group.aks.location
   tags                = local.tags
 }
 
@@ -86,8 +79,8 @@ resource "azurerm_role_assignment" "github_build_acr_push" {
 
 resource "azurerm_user_assigned_identity" "github_deploy" {
   name                = "${var.cluster_name}-github-deploy"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.aks.name
+  location            = azurerm_resource_group.aks.location
   tags                = local.tags
 }
 
@@ -97,6 +90,17 @@ resource "azurerm_federated_identity_credential" "github_deploy" {
   audience                  = ["api://AzureADTokenExchange"]
   issuer                    = "https://token.actions.githubusercontent.com"
   subject                   = "repo:${var.github_simplaca_repository}:environment:production"
+}
+
+# Segunda credencial na MESMA identidade de deploy: o repo da infra aplica
+# mudanca de objeto Kubernetes (HPA, resources, probes, ingress) sem imagem
+# nova. Precisa das mesmas permissoes, entao nao ha identidade separada.
+resource "azurerm_federated_identity_credential" "github_deploy_infra" {
+  name                      = "github-infra-config-prod"
+  user_assigned_identity_id = azurerm_user_assigned_identity.github_deploy.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = "https://token.actions.githubusercontent.com"
+  subject                   = "repo:${var.github_infra_repository}:environment:production"
 }
 
 resource "azurerm_kubernetes_cluster" "main" {
@@ -177,4 +181,58 @@ resource "azurerm_role_assignment" "operator_cluster_admin" {
   scope                = azurerm_kubernetes_cluster.main.id
   role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
   principal_id         = var.aks_admin_principal_id
+}
+
+# ---------------------------------------------------------------------------
+# Segredos de aplicacao: Key Vault + workload identity para o External
+# Secrets Operator. Cada release tem UM segredo no vault, com um objeto JSON
+# dentro; o ESO expande esse JSON nas chaves do Secret do Kubernetes. Assim
+# acrescentar uma variavel de ambiente nao toca git nem CI.
+# ---------------------------------------------------------------------------
+
+resource "azurerm_key_vault" "apps" {
+  name                       = var.key_vault_name
+  resource_group_name        = azurerm_resource_group.aks.name
+  location                   = azurerm_resource_group.aks.location
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  purge_protection_enabled   = false
+  soft_delete_retention_days = 7
+
+  # RBAC em vez de access policies: as permissoes ficam em role assignments,
+  # junto com todas as outras deste arquivo.
+  rbac_authorization_enabled = true
+
+  tags = local.tags
+}
+
+# Voce escreve os segredos; o ESO so le.
+resource "azurerm_role_assignment" "operator_key_vault_officer" {
+  scope                = azurerm_key_vault.apps.id
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = var.aks_admin_principal_id
+}
+
+resource "azurerm_user_assigned_identity" "external_secrets" {
+  name                = "${var.cluster_name}-external-secrets"
+  resource_group_name = azurerm_resource_group.aks.name
+  location            = azurerm_resource_group.aks.location
+  tags                = local.tags
+}
+
+resource "azurerm_role_assignment" "external_secrets_reader" {
+  scope                = azurerm_key_vault.apps.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.external_secrets.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Workload identity: o ServiceAccount do ESO troca o token projetado do
+# cluster por um token do Entra. Nenhum segredo de Azure vai para o cluster.
+resource "azurerm_federated_identity_credential" "external_secrets" {
+  name                      = "external-secrets-operator"
+  user_assigned_identity_id = azurerm_user_assigned_identity.external_secrets.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.external_secrets_namespace}:${var.external_secrets_service_account}"
 }
