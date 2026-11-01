@@ -1,0 +1,5 @@
+apiVersion: v2
+name: app-secrets
+description: ClusterSecretStore and per-release ExternalSecrets backed by Azure Key Vault.
+type: application
+version: 0.1.0

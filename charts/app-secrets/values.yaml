@@ -1,0 +1,24 @@
+# Applied by terraform/cluster/prod, which fills these from the Azure state
+# and from apps/releases.yaml. Nothing here is edited by hand.
+
+storeName: azure-keyvault
+refreshInterval: 1h
+
+keyVault:
+  # https://<name>.vault.azure.net
+  url: ""
+  tenantId: ""
+  # Client ID of the workload identity the operator's ServiceAccount uses.
+  clientId: ""
+
+serviceAccount:
+  name: external-secrets
+  namespace: external-secrets
+
+# One entry per release. keyVaultSecret holds a JSON object whose keys become
+# the keys of the Kubernetes Secret.
+releases: []
+#  - name: simplaca-api
+#    namespace: simplaca
+#    secretName: simplaca-api-env
+#    keyVaultSecret: simplaca-api-env

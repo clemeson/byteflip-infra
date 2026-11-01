@@ -1,0 +1,8 @@
+# Applied by terraform/cluster/prod. The ACME contact address is a required
+# value: it is not versioned here and not injected at runtime.
+ingressClassName: traefik
+
+acme:
+  email: ""
+  server: https://acme-v02.api.letsencrypt.org/directory
+  privateKeySecretName: letsencrypt-prod-account

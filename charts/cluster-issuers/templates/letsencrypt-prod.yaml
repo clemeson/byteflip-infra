@@ -1,0 +1,14 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: {{ required "acme.email is required: set it in terraform/cluster/prod" .Values.acme.email | quote }}
+    server: {{ .Values.acme.server | quote }}
+    privateKeySecretRef:
+      name: {{ .Values.acme.privateKeySecretName }}
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: {{ .Values.ingressClassName }}
