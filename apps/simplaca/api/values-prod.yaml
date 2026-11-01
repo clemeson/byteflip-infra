@@ -1,0 +1,59 @@
+nameOverride: simplaca-api
+
+# CI supplies repository and immutable commit SHA at deploy time.
+image:
+  repository: ""
+  tag: ""
+
+containerPort: 4000
+
+# The Dockerfile's default CMD runs migrations. Override it here so only
+# the Helm pre-upgrade Job applies migrations once per release.
+command: ["node", "dist/src/main.js"]
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+env:
+  configMap:
+    enabled: true
+    data:
+      NODE_ENV: production
+      PORT: "4000"
+      PLACAS_API_BASE_URL: https://wdapi2.com.br
+      REPORT_PRICE_CENTS: "1199"
+      SMTP_HOST: email-smtp.us-east-1.amazonaws.com
+      SMTP_PORT: "587"
+      FROM_EMAIL: noreply@simplaca.com.br
+      FROM_NAME: Simplaca
+      BLOG_ADMIN_EMAIL: clemeson@simplaca.com.br
+  secret:
+    enabled: true
+    name: simplaca-api-env
+
+ingress:
+  enabled: true
+  host: api.simplaca.com.br
+  ingressClassName: traefik
+  clusterIssuer: letsencrypt-prod
+
+migration:
+  enabled: true
+  command: ["npx", "prisma", "migrate", "deploy"]

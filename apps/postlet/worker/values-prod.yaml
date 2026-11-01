@@ -1,0 +1,12 @@
+# Draft only: confirm worker command, queue and shutdown behavior in source.
+deploymentReady: false
+nameOverride: postlet-worker
+image:
+  repository: ""
+  tag: ""
+service:
+  enabled: false
+ingress:
+  enabled: false
+probes:
+  enabled: false

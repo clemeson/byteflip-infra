@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: simplaca
+  labels:
+    app.kubernetes.io/part-of: simplaca
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: postlet
+  labels:
+    app.kubernetes.io/part-of: postlet

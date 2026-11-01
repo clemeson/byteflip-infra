@@ -1,0 +1,15 @@
+ingressClass:
+  enabled: true
+  name: traefik
+  isDefaultClass: false
+
+providers:
+  kubernetesIngress:
+    enabled: true
+
+service:
+  type: LoadBalancer
+
+ingressRoute:
+  dashboard:
+    enabled: false

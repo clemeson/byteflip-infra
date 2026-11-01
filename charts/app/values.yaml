@@ -1,0 +1,89 @@
+# Each release supplies its own values file and namespace.
+nameOverride: ""
+deploymentReady: true
+deployNonce: ""
+replicas: 1
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+containerPort: 3000
+command: []
+args: []
+terminationGracePeriodSeconds: 30
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+probes:
+  enabled: true
+  path: /health
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 20
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+env:
+  configMap:
+    enabled: false
+    name: ""
+    data: {}
+  secret:
+    enabled: false
+    name: ""
+  extra: []
+
+service:
+  enabled: true
+  port: 80
+
+ingress:
+  enabled: false
+  host: ""
+  ingressClassName: traefik
+  clusterIssuer: letsencrypt-prod
+  tlsSecretName: ""
+
+# Database migrations run before pods change. Keep migrations compatible
+# with the previous release, because Helm rollback does not revert schema.
+migration:
+  enabled: false
+  command: ["npx", "prisma", "migrate", "deploy"]
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 604800
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+
+volumes: []
+volumeMounts: []

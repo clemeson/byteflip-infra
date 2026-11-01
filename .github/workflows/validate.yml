@@ -1,0 +1,34 @@
+name: Validate infrastructure
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Terraform format
+        run: terraform fmt -check -recursive terraform
+      - name: Validate AKS stack
+        run: |
+          terraform -chdir=terraform/aks/prod init -input=false
+          terraform -chdir=terraform/aks/prod validate
+      - name: Render Simplaca chart
+        run: |
+          helm lint charts/app \
+            --values apps/simplaca/api/values-prod.yaml \
+            --set-string image.repository=example.azurecr.io/simplaca-api \
+            --set-string image.tag=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          helm template simplaca-api charts/app \
+            --namespace simplaca \
+            --values apps/simplaca/api/values-prod.yaml \
+            --set-string image.repository=example.azurecr.io/simplaca-api \
+            --set-string image.tag=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            >/dev/null
