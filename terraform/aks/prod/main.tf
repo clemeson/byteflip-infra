@@ -117,6 +117,16 @@ resource "azurerm_kubernetes_cluster" "main" {
     auto_scaling_enabled = false
     os_disk_size_gb      = 64
     vnet_subnet_id       = azurerm_subnet.nodes.id
+
+    # Declarado para casar com o default que o AKS aplica. Sem isso o
+    # Terraform tenta remover o bloco em todo plan.
+    #
+    # Atencao: 10% de 2 nos arredonda para 1 no extra durante upgrade, e a
+    # quota regional de 4 vCPU ja esta toda consumida pelos dois nos. Um
+    # upgrade de node pool vai falhar por quota enquanto ela nao aumentar.
+    upgrade_settings {
+      max_surge = "10%"
+    }
   }
 
   identity {
