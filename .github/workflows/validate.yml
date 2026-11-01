@@ -16,9 +16,9 @@ jobs:
           version: v3.16.3
       - name: Terraform format
         run: terraform fmt -check -recursive terraform
-      - name: Validate AKS stack
+      - name: Validate AKS Terraform (no deployment)
         run: |
-          terraform -chdir=terraform/aks/prod init -input=false
+          terraform -chdir=terraform/aks/prod init -backend=false -input=false
           terraform -chdir=terraform/aks/prod validate
       - name: Render Simplaca chart
         run: |

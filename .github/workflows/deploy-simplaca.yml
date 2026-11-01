@@ -19,8 +19,24 @@ on:
         required: true
         type: string
     secrets:
-      INFRA_REPO_READ_TOKEN:
-        required: false
+      NODE_ENV:
+        required: true
+      PORT:
+        required: true
+      PLACAS_API_BASE_URL:
+        required: true
+      REPORT_PRICE_CENTS:
+        required: true
+      SMTP_HOST:
+        required: true
+      SMTP_PORT:
+        required: true
+      FROM_EMAIL:
+        required: true
+      FROM_NAME:
+        required: true
+      BLOG_ADMIN_EMAIL:
+        required: true
       DATABASE_URL:
         required: true
       PLACAS_API_TOKEN:
@@ -65,7 +81,6 @@ jobs:
         with:
           repository: clemeson/byteflip-infra
           ref: main
-          token: ${{ secrets.INFRA_REPO_READ_TOKEN || github.token }}
       - name: Log in to Azure with OIDC
         uses: azure/login@v3
         with:
@@ -90,6 +105,15 @@ jobs:
             --repository simplaca-api --output tsv | grep -Fx -- "$IMAGE_SHA" >/dev/null
       - name: Update application Secret
         env:
+          NODE_ENV: ${{ secrets.NODE_ENV }}
+          PORT: ${{ secrets.PORT }}
+          PLACAS_API_BASE_URL: ${{ secrets.PLACAS_API_BASE_URL }}
+          REPORT_PRICE_CENTS: ${{ secrets.REPORT_PRICE_CENTS }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          FROM_NAME: ${{ secrets.FROM_NAME }}
+          BLOG_ADMIN_EMAIL: ${{ secrets.BLOG_ADMIN_EMAIL }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PLACAS_API_TOKEN: ${{ secrets.PLACAS_API_TOKEN }}
           IUGU_API_TOKEN: ${{ secrets.IUGU_API_TOKEN }}

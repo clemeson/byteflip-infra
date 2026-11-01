@@ -9,6 +9,15 @@ import sys
 
 
 REQUIRED = (
+    "NODE_ENV",
+    "PORT",
+    "PLACAS_API_BASE_URL",
+    "REPORT_PRICE_CENTS",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "FROM_EMAIL",
+    "FROM_NAME",
+    "BLOG_ADMIN_EMAIL",
     "DATABASE_URL",
     "PLACAS_API_TOKEN",
     "IUGU_API_TOKEN",

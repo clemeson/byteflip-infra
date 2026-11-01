@@ -25,4 +25,16 @@ helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
   --atomic --wait --timeout 10m
 
 kubectl apply -f "$ROOT/cluster/namespaces.yaml"
-kubectl apply -f "$ROOT/cluster/issuers/letsencrypt-prod.yaml"
+: "${ACME_EMAIL:?Set ACME_EMAIL to the ACME contact address}"
+python3 - "$ROOT/cluster/issuers/letsencrypt-prod.yaml" <<'PY' | kubectl apply -f -
+import json
+import os
+from pathlib import Path
+import sys
+
+manifest = Path(sys.argv[1]).read_text()
+email = os.environ["ACME_EMAIL"]
+if manifest.count("  acme:\n") != 1:
+    raise SystemExit("Expected exactly one ACME configuration in ClusterIssuer")
+print(manifest.replace("  acme:\n", "  acme:\n    email: " + json.dumps(email) + "\n", 1))
+PY

@@ -33,17 +33,7 @@ autoscaling:
 
 env:
   configMap:
-    enabled: true
-    data:
-      NODE_ENV: production
-      PORT: "4000"
-      PLACAS_API_BASE_URL: https://wdapi2.com.br
-      REPORT_PRICE_CENTS: "1199"
-      SMTP_HOST: email-smtp.us-east-1.amazonaws.com
-      SMTP_PORT: "587"
-      FROM_EMAIL: noreply@simplaca.com.br
-      FROM_NAME: Simplaca
-      BLOG_ADMIN_EMAIL: clemeson@simplaca.com.br
+    enabled: false
   secret:
     enabled: true
     name: simplaca-api-env

@@ -3,7 +3,9 @@
 `scripts/apply-cluster.sh` instala Traefik e cert-manager com versões fixas,
 cria os namespaces e aplica o ClusterIssuer. A execução exige `kubectl`
 configurado no contexto `personal-prod`, Helm e acesso ao AKS. O script recusa
-outro contexto para evitar alterações em cluster errado.
+outro contexto para evitar alterações em cluster errado. Informe o contato
+do Let's Encrypt pela variável de ambiente `ACME_EMAIL` ao executar o script;
+o endereço não fica versionado no manifesto.
 
 Traefik recebe um Azure Load Balancer público. Após a instalação, consulte o
 IP com `kubectl get svc -n traefik` e crie o A record da API no Route 53.

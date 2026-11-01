@@ -4,7 +4,6 @@ metadata:
   name: letsencrypt-prod
 spec:
   acme:
-    email: clemeson@simplaca.com.br
     server: https://acme-v02.api.letsencrypt.org/directory
     privateKeySecretRef:
       name: letsencrypt-prod-account
