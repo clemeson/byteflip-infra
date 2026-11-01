@@ -56,7 +56,36 @@ variable "key_vault_name" {
 variable "external_secrets_chart_version" {
   description = "Pinned External Secrets Operator chart version."
   type        = string
-  default     = "0.21.0"
+  default     = "2.14.0"
+}
+
+variable "reloader_chart_version" {
+  description = "Pinned Stakater Reloader chart version."
+  type        = string
+  default     = "2.2.19"
+}
+
+# O Secret vem do operator, nao do release Helm, entao o chart nao consegue
+# calcular um checksum dele como faz com o ConfigMap. O Reloader observa o
+# Secret e reinicia os Deployments que o consomem quando o valor muda.
+variable "reloader_resources" {
+  description = "Resource requests and limits for the Reloader controller."
+  type = object({
+    requests = object({ cpu = string, memory = string })
+    limits   = object({ cpu = string, memory = string })
+  })
+  default = {
+    requests = { cpu = "10m", memory = "48Mi" }
+    limits   = { cpu = "100m", memory = "128Mi" }
+  }
+}
+
+# Intervalo com que o operator relê o Key Vault. O vault nao notifica o
+# cluster, entao esta e a latencia de uma troca de valor chegar em producao.
+variable "secret_refresh_interval" {
+  description = "How often External Secrets re-reads Key Vault."
+  type        = string
+  default     = "5m"
 }
 
 # O chart do ESO nao define requests. Sem isso os pods ficam BestEffort e sao

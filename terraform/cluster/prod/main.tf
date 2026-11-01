@@ -2,7 +2,7 @@ locals {
   # App ID publico e fixo do servidor AAD do AKS; igual em todos os tenants.
   aks_aad_server_id = "6dae42f8-4368-4678-94ff-3960e28e3630"
 
-  addon_namespaces = toset(["traefik", "cert-manager"])
+  addon_namespaces = toset(["traefik", "cert-manager", "reloader"])
 }
 
 data "azurerm_kubernetes_cluster" "main" {
@@ -156,6 +156,29 @@ resource "helm_release" "external_secrets" {
   timeout = 600
 }
 
+# Fecha a lacuna do envFrom: variavel de ambiente e lida no start do
+# container, entao trocar o Secret nao afeta pod em execucao. O Reloader
+# observa Secrets e ConfigMaps e faz patch na anotacao do pod template do
+# Deployment que os consome, o que dispara um rolling update.
+resource "helm_release" "reloader" {
+  name       = "reloader"
+  namespace  = kubernetes_namespace.addons["reloader"].metadata[0].name
+  repository = "https://stakater.github.io/stakater-charts"
+  chart      = "reloader"
+  version    = var.reloader_chart_version
+
+  values = [yamlencode({
+    reloader = {
+      watchGlobally = true
+      deployment    = { resources = var.reloader_resources }
+    }
+  })]
+
+  atomic  = true
+  wait    = true
+  timeout = 600
+}
+
 # ClusterSecretStore e um ExternalSecret por release. Fora do chart da
 # aplicacao de proposito: o Job de migracao roda em pre-upgrade e precisa do
 # Secret ja existindo, o que nao aconteceria se ele nascesse no mesmo release.
@@ -165,6 +188,7 @@ resource "helm_release" "app_secrets" {
   chart     = "${path.module}/../../../charts/app-secrets"
 
   values = [yamlencode({
+    refreshInterval = var.secret_refresh_interval
     keyVault = {
       url      = data.azurerm_key_vault.apps.vault_uri
       tenantId = data.azurerm_client_config.current.tenant_id
