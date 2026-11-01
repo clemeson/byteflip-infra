@@ -18,15 +18,16 @@ O Deployment mantém os pods; HPA ajusta a quantidade de réplicas quando ativad
 
 - O AKS `personal-prod` está criado em East US 2, com dois nós
   `Standard_D2as_v7`. O ACR e as identidades GitHub continuam em Brazil South.
-- O CI do Simplaca publica no ACR, baixa o chart deste repositório e executa
-  `helm upgrade` no AKS com a imagem identificada pelo SHA.
+- O CI do Simplaca publica no ACR e chama o workflow reutilizável desta infra.
+  Esse workflow executa `helm upgrade` com a imagem identificada pelo SHA.
 - Simplaca tem values reais de porta, comando, domínio e migração. A imagem
   é fornecida pelo CI como repositório ACR e SHA do commit.
 - Postlet está **bloqueado para deploy** até confirmar seu código, porta,
   comando do worker, health check, segredos e migrações. Seus arquivos values
   são rascunhos e o chart recusa renderizá-los.
-- O workflow da aplicação cria ou atualiza o Secret `simplaca-api-env` no
-  namespace `simplaca` antes do Helm; consulte `apps/simplaca/api/README.md`.
+- O workflow da infra recebe os Secrets do Simplaca durante a execução e usa
+  o script da aplicação para atualizar `simplaca-api-env` antes do Helm;
+  consulte `apps/simplaca/api/README.md`.
 
 ## Sequência de implantação
 
@@ -41,8 +42,8 @@ O Deployment mantém os pods; HPA ajusta a quantidade de réplicas quando ativad
    Informe `ACME_EMAIL` no ambiente. O script instala os add-ons com versões
    fixas e cria namespaces e ClusterIssuer.
 6. Configurar variáveis e segredos do GitHub Actions conforme o `DEPLOY.md`
-   do Simplaca. O workflow da aplicação publica a imagem no ACR, sincroniza
-   seu Secret e executa o Helm com o chart desta infra.
+   do Simplaca. O workflow da aplicação publica a imagem no ACR e chama o
+   workflow desta infra; a infra sincroniza o Secret e executa o Helm.
 7. Apontar `api.simplaca.com.br` no Route 53 para o IP público do serviço
    Traefik e verificar TLS, `/health` e um fluxo real da aplicação.
 
