@@ -1,0 +1,101 @@
+# Unico caminho de Helm, com duas entradas:
+#
+#   workflow_call  o repo da aplicacao publicou uma imagem e passa o SHA
+#   push na main   a configuracao mudou aqui; a imagem vem do release vivo
+#
+# Release, namespace e values estao fixos abaixo porque ha uma aplicacao.
+# Com uma segunda, parametrize via inputs ou um matrix.
+name: Deploy to AKS
+
+on:
+  workflow_call:
+    inputs:
+      image_repository:
+        required: true
+        type: string
+      image_tag:
+        description: Full commit SHA of the image to deploy
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - charts/app/**
+      - apps/simplaca/**
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aks-deploy
+  cancel-in-progress: false
+
+env:
+  RELEASE: simplaca-api
+  NAMESPACE: simplaca
+  VALUES: apps/simplaca/api/values-prod.yaml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/setup-kubectl@v4
+      - uses: azure/use-kubelogin@v1
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Configure AKS
+        run: |
+          echo "KUBECONFIG=$RUNNER_TEMP/aks-kubeconfig" >> "$GITHUB_ENV"
+          az aks get-credentials --resource-group personal-aks-eastus2-prod \
+            --name personal-prod --file "$RUNNER_TEMP/aks-kubeconfig" --overwrite-existing
+          KUBECONFIG="$RUNNER_TEMP/aks-kubeconfig" kubelogin convert-kubeconfig -l azurecli
+      - name: Resolve image
+        env:
+          INPUT_REPOSITORY: ${{ inputs.image_repository }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          test "$(kubectl config current-context)" = personal-prod
+          if [[ -n "$INPUT_TAG" ]]; then
+            # Imagem nova: a migracao roda antes dos pods trocarem.
+            echo "IMAGE_REPOSITORY=$INPUT_REPOSITORY" >> "$GITHUB_ENV"
+            echo "IMAGE_TAG=$INPUT_TAG" >> "$GITHUB_ENV"
+            echo "MIGRATE=true" >> "$GITHUB_ENV"
+            echo "DESCRIPTION=image=${INPUT_TAG:0:12} run=$GITHUB_RUN_ID" >> "$GITHUB_ENV"
+          else
+            # So a configuracao mudou. A imagem vem do release vivo, e a
+            # migracao fica desligada: a imagem nao muda, logo o schema que
+            # ela espera nao muda.
+            values="$(helm get values "$RELEASE" --namespace "$NAMESPACE" -o json)" || {
+              echo "No $RELEASE release yet. Publish an image from simplaca-backend first." >&2
+              exit 1
+            }
+            echo "IMAGE_REPOSITORY=$(jq -re .image.repository <<<"$values")" >> "$GITHUB_ENV"
+            echo "IMAGE_TAG=$(jq -re .image.tag <<<"$values")" >> "$GITHUB_ENV"
+            echo "MIGRATE=false" >> "$GITHUB_ENV"
+            echo "DESCRIPTION=config=${GITHUB_SHA:0:12} run=$GITHUB_RUN_ID" >> "$GITHUB_ENV"
+          fi
+      - name: Upgrade Helm release
+        run: |
+          helm upgrade --install "$RELEASE" charts/app \
+            --namespace "$NAMESPACE" \
+            --values "$VALUES" \
+            --set-string "image.repository=$IMAGE_REPOSITORY" \
+            --set-string "image.tag=$IMAGE_TAG" \
+            --set "migration.enabled=$MIGRATE" \
+            --description "$DESCRIPTION" \
+            --atomic --wait --timeout 10m --history-max 20
+          helm status "$RELEASE" --namespace "$NAMESPACE"
+          echo "$RELEASE -> $IMAGE_REPOSITORY:$IMAGE_TAG ($DESCRIPTION)" >> "$GITHUB_STEP_SUMMARY"

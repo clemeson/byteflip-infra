@@ -1,4 +1,3 @@
-{{- if not .Values.deploymentReady }}{{ fail "This release is a draft: confirm the application image, command, ports, probes and secrets before deployment" }}{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,17 +22,11 @@ spec:
     metadata:
       labels:
         app: {{ include "app.name" . }}
-      {{- if or .Values.deployNonce (and .Values.env.configMap.enabled .Values.env.configMap.data) }}
+      {{- if and .Values.env.configMap.enabled .Values.env.configMap.data }}
       annotations:
-        {{- if .Values.deployNonce }}
-        byteflip-infra/deploy-nonce: {{ .Values.deployNonce | quote }}
-        {{- end }}
-        {{- if and .Values.env.configMap.enabled .Values.env.configMap.data }}
         # Sem isso, mudar uma env no ConfigMap não reinicia o pod e a
-        # mudança só passa a valer no próximo deploy de imagem — era
-        # assim no chart antigo e passava despercebido.
+        # mudança só passa a valer no próximo deploy de imagem.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- end }}
       {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
@@ -68,9 +61,15 @@ spec:
                 name: {{ include "app.secretName" . }}
             {{- end }}
           {{- end }}
-          {{- with .Values.env.extra }}
+          {{- if or .Values.portEnvName .Values.env.extra }}
           env:
+            {{- if .Values.portEnvName }}
+            - name: {{ .Values.portEnvName }}
+              value: {{ .Values.containerPort | quote }}
+            {{- end }}
+            {{- with .Values.env.extra }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

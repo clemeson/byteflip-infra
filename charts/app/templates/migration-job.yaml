@@ -30,6 +30,9 @@ spec:
         - name: migrate
           image: {{ include "app.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if not .Values.migration.command }}
+          {{- fail "migration.enabled is true but migration.command is empty: declare it in the release values" }}
+          {{- end }}
           command:
             {{- toYaml .Values.migration.command | nindent 12 }}
           envFrom:

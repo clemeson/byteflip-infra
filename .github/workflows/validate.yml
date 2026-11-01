@@ -16,11 +16,13 @@ jobs:
           version: v3.16.3
       - name: Terraform format
         run: terraform fmt -check -recursive terraform
-      - name: Validate AKS Terraform (no deployment)
+      - name: Validate Terraform (no deployment)
         run: |
-          terraform -chdir=terraform/aks/prod init -backend=false -input=false
-          terraform -chdir=terraform/aks/prod validate
-      - name: Render Simplaca chart
+          for dir in terraform/aks/prod terraform/cluster/prod; do
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+      - name: Render charts
         run: |
           helm lint charts/app \
             --values apps/simplaca/api/values-prod.yaml \
@@ -30,5 +32,14 @@ jobs:
             --namespace simplaca \
             --values apps/simplaca/api/values-prod.yaml \
             --set-string image.repository=example.azurecr.io/simplaca-api \
-            --set-string image.tag=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-            >/dev/null
+            --set-string image.tag=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null
+          helm template app-secrets charts/app-secrets \
+            --set keyVault.url=https://example.vault.azure.net \
+            --set keyVault.tenantId=00000000-0000-0000-0000-000000000000 >/dev/null
+          helm template cluster-issuers charts/cluster-issuers \
+            --set acme.email=ci@example.com >/dev/null
+          # Sem e-mail o ClusterIssuer tem de falhar.
+          if helm template cluster-issuers charts/cluster-issuers >/dev/null 2>&1; then
+            echo 'ClusterIssuer rendered without acme.email' >&2
+            exit 1
+          fi

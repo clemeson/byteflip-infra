@@ -5,7 +5,10 @@ image:
   repository: ""
   tag: ""
 
+# Fonte unica da porta: o chart injeta PORT=containerPort no container, e a
+# probe e o Service usam o mesmo numero. PORT nao deve estar no Key Vault.
 containerPort: 4000
+portEnvName: PORT
 
 # The Dockerfile's default CMD runs migrations. Override it here so only
 # the Helm pre-upgrade Job applies migrations once per release.

@@ -1,7 +1,5 @@
 # Each release supplies its own values file and namespace.
 nameOverride: ""
-deploymentReady: true
-deployNonce: ""
 replicas: 1
 
 image:
@@ -17,6 +15,10 @@ strategy:
     maxUnavailable: 0
 
 containerPort: 3000
+# Nome da env que recebe containerPort. Evita declarar a porta duas vezes:
+# se o app le PORT (ou SERVER_PORT) do ambiente, aponte aqui em vez de
+# repetir o numero num Secret ou ConfigMap.
+portEnvName: ""
 command: []
 args: []
 terminationGracePeriodSeconds: 30
@@ -74,7 +76,8 @@ ingress:
 # with the previous release, because Helm rollback does not revert schema.
 migration:
   enabled: false
-  command: ["npx", "prisma", "migrate", "deploy"]
+  # Sem default: cada release declara o seu.
+  command: []
   backoffLimit: 1
   ttlSecondsAfterFinished: 604800
   resources:
