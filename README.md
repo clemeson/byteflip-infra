@@ -9,7 +9,7 @@ e os Dockerfiles das aplicações continuam nos seus próprios repositórios.
 | `charts/app/` | Chart Helm comum para API e worker |
 | `apps/<produto>/<componente>/values-prod.yaml` | Configuração de cada release |
 | `cluster/` | Namespaces, Traefik, cert-manager e emissor TLS |
-| `scripts/` | Aplicação idempotente dos add-ons e deploy por SHA |
+| `scripts/` | Instalação dos componentes compartilhados do cluster |
 
 O Terraform cria a infraestrutura Azure. Helm instala os recursos Kubernetes.
 O Deployment mantém os pods; HPA ajusta a quantidade de réplicas quando ativado.
@@ -18,16 +18,15 @@ O Deployment mantém os pods; HPA ajusta a quantidade de réplicas quando ativad
 
 - O AKS `personal-prod` está criado em East US 2, com dois nós
   `Standard_D2as_v7`. O ACR e as identidades GitHub continuam em Brazil South.
-- O CI do Simplaca publica no ACR e chama o workflow Helm deste repositório
-  para implantar a imagem por SHA no AKS.
+- O CI do Simplaca publica no ACR, baixa o chart deste repositório e executa
+  `helm upgrade` no AKS com a imagem identificada pelo SHA.
 - Simplaca tem values reais de porta, comando, domínio e migração. A imagem
   é fornecida pelo CI como repositório ACR e SHA do commit.
 - Postlet está **bloqueado para deploy** até confirmar seu código, porta,
   comando do worker, health check, segredos e migrações. Seus arquivos values
   são rascunhos e o chart recusa renderizá-los.
-- O workflow cria ou atualiza o Secret `simplaca-api-env` no namespace
-  `simplaca` antes do Helm; consulte
-  `apps/simplaca/api/README.md`.
+- O workflow da aplicação cria ou atualiza o Secret `simplaca-api-env` no
+  namespace `simplaca` antes do Helm; consulte `apps/simplaca/api/README.md`.
 
 ## Sequência de implantação
 
@@ -42,18 +41,12 @@ O Deployment mantém os pods; HPA ajusta a quantidade de réplicas quando ativad
    Informe `ACME_EMAIL` no ambiente. O script instala os add-ons com versões
    fixas e cria namespaces e ClusterIssuer.
 6. Configurar variáveis e segredos do GitHub Actions conforme o `DEPLOY.md`
-   do Simplaca. O workflow publica a imagem no ACR e chama o workflow Helm,
-   que sincroniza o Secret antes do deploy.
+   do Simplaca. O workflow da aplicação publica a imagem no ACR, sincroniza
+   seu Secret e executa o Helm com o chart desta infra.
 7. Apontar `api.simplaca.com.br` no Route 53 para o IP público do serviço
    Traefik e verificar TLS, `/health` e um fluxo real da aplicação.
 
-Comando de deploy depois que imagem e Secret estiverem prontos:
-
-```bash
-./scripts/deploy-app.sh simplaca api <acr>.azurecr.io/simplaca-api <sha-completo>
-```
-
-O script usa `helm upgrade --install --atomic --wait`: se os recursos não
+O workflow usa `helm upgrade --install --atomic --wait`: se os recursos não
 ficarem prontos, Helm tenta voltar à revisão anterior. Para um problema que
 apareça depois de ficar Ready, usar `helm history simplaca-api -n simplaca`
 e `helm rollback simplaca-api <revisão> -n simplaca --wait`. Migrações do banco
