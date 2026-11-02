@@ -22,17 +22,73 @@ jobs:
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" validate
           done
+      # Checagens que o helm nao faz: o manifesto aponta para arquivos e
+      # nomes que precisam existir e casar. Errar aqui so apareceria no
+      # deploy, com o release pela metade.
+      - name: Validate apps/releases.yaml
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys, yaml
+
+          releases = yaml.safe_load(open("apps/releases.yaml"))["releases"]
+          errors, seen = [], set()
+          for r in releases:
+              name = r["release"]
+              if name in seen:
+                  errors.append(f"{name}: release duplicada")
+              seen.add(name)
+              values = pathlib.Path(r["values"])
+              if not values.is_file():
+                  errors.append(f"{name}: values {values} nao existe")
+                  continue
+              v = yaml.safe_load(values.read_text())
+              if v.get("nameOverride") != name:
+                  errors.append(
+                      f"{name}: nameOverride do values e {v.get('nameOverride')!r}. "
+                      "Divergir renomearia Deployment e Service sem o release mudar."
+                  )
+              secret = ((v.get("env") or {}).get("secret") or {})
+              declared = secret.get("name") or f"{name}-env"
+              if secret.get("enabled") and declared != r["keyVaultSecret"]:
+                  errors.append(
+                      f"{name}: env.secret.name={declared} != keyVaultSecret={r['keyVaultSecret']}. "
+                      "O ExternalSecret criaria um Secret com outro nome e o pod ficaria sem env."
+                  )
+              mig = v.get("migration") or {}
+              if mig.get("enabled") and not mig.get("command"):
+                  errors.append(f"{name}: migration.enabled sem migration.command")
+          if errors:
+              print("\n".join(f"::error::{e}" for e in errors))
+              sys.exit(1)
+          print(f"{len(releases)} releases coerentes")
+          PY
       - name: Render charts
         run: |
-          helm lint charts/app \
-            --values apps/simplaca/api/values-prod.yaml \
-            --set-string image.repository=example.azurecr.io/simplaca-api \
-            --set-string image.tag=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          helm template simplaca-api charts/app \
-            --namespace simplaca \
-            --values apps/simplaca/api/values-prod.yaml \
-            --set-string image.repository=example.azurecr.io/simplaca-api \
-            --set-string image.tag=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null
+          # Toda release do manifesto, nao so a primeira: os values de uma
+          # release nova passariam sem checagem se este passo ficasse fixo
+          # no simplaca.
+          releases=$(python3 -c 'import json,yaml,sys; json.dump(yaml.safe_load(open("apps/releases.yaml"))["releases"], sys.stdout)')
+          echo "$releases" | jq -c '.[]' | while read -r r; do
+            release=$(jq -r .release <<<"$r")
+            namespace=$(jq -r .namespace <<<"$r")
+            values=$(jq -r .values <<<"$r")
+            echo "--- $release"
+            # migration ligada de proposito: cobre tambem o Job, que sem isso
+            # nunca seria renderizado no CI.
+            migrate=$(python3 -c 'import yaml,sys; print(str(bool((yaml.safe_load(open(sys.argv[1])).get("migration") or {}).get("enabled"))).lower())' "$values")
+            # helm lint recebe CAMINHO, nao nome de release; helm template
+            # recebe os dois. Por isso os dois comandos sao escritos separados
+            # em vez de num laco.
+            common=(
+              --namespace "$namespace"
+              --values "$values"
+              --set "migration.enabled=$migrate"
+              --set-string image.repository=example.azurecr.io/"$release"
+              --set-string image.tag=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            )
+            helm lint charts/app "${common[@]}"
+            helm template "$release" charts/app "${common[@]}" >/dev/null
+          done
           helm template app-secrets charts/app-secrets \
             --set keyVault.url=https://example.vault.azure.net \
             --set keyVault.tenantId=00000000-0000-0000-0000-000000000000 >/dev/null

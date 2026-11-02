@@ -1,0 +1,27 @@
+# Fonte unica das releases deste cluster.
+#
+# Consumido por dois lugares, e e por isso que o arquivo existe:
+#   .github/workflows/deploy.yml      -> matrix do helm upgrade
+#   terraform/cluster/prod/main.tf    -> um ExternalSecret por release
+#
+# Antes disso o workflow tinha release/namespace/values fixos num bloco env:
+# e o terraform tinha a mesma lista numa variavel. Duas listas, uma verdade.
+#
+# Acrescentar uma aplicacao = um item aqui + o seu values-prod.yaml. O
+# namespace precisa existir antes (variable application_namespaces) porque a
+# identidade de deploy do CI tem RBAC Writer, que nao cria namespace.
+#
+#   release         nome do release Helm. Define tambem o nome do Deployment,
+#                   do Service (<release>-svc) e o default do Secret
+#                   (<release>-env). Trocar depois recria tudo.
+#   namespace       tem que estar em application_namespaces.
+#   values          caminho neste repo.
+#   keyVaultSecret  nome do segredo no Key Vault byteflipappsprod. O valor
+#                   dele e UM objeto JSON; cada chave vira uma chave do
+#                   Secret. Tem que casar com env.secret.name do values.
+releases:
+  - release: simplaca-api
+    namespace: simplaca
+    values: apps/simplaca/api/values-prod.yaml
+    keyVaultSecret: simplaca-api-env
+

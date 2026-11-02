@@ -1,15 +1,21 @@
 # Unico caminho de Helm, com duas entradas:
 #
-#   workflow_call  o repo da aplicacao publicou uma imagem e passa o SHA
-#   push na main   a configuracao mudou aqui; a imagem vem do release vivo
+#   workflow_call  o repo da aplicacao publicou uma imagem, passa release+SHA
+#                  e so essa release e implantada
+#   push na main   a configuracao mudou aqui; TODAS as releases sao
+#                  reimplantadas, porque charts/app e compartilhado
 #
-# Release, namespace e values estao fixos abaixo porque ha uma aplicacao.
-# Com uma segunda, parametrize via inputs ou um matrix.
+# Release, namespace e values saem de apps/releases.yaml. Nao ha nome de
+# aplicacao neste arquivo.
 name: Deploy to AKS
 
 on:
   workflow_call:
     inputs:
+      release:
+        description: Release name as declared in apps/releases.yaml
+        required: true
+        type: string
       image_repository:
         required: true
         type: string
@@ -21,7 +27,7 @@ on:
     branches: [main]
     paths:
       - charts/app/**
-      - apps/simplaca/**
+      - apps/**
       - .github/workflows/deploy.yml
   workflow_dispatch:
 
@@ -29,24 +35,68 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: aks-deploy
-  cancel-in-progress: false
-
-env:
-  RELEASE: simplaca-api
-  NAMESPACE: simplaca
-  VALUES: apps/simplaca/api/values-prod.yaml
-
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      # Em workflow_call o job roda no contexto do repo chamador, entao um
+      # checkout sem argumentos clonaria a aplicacao. Os charts, os values e
+      # o releases.yaml estao aqui, logo o checkout e sempre explicito.
+      - uses: actions/checkout@v4
+        with:
+          repository: clemeson/byteflip-infra
+          ref: main
+      - id: pick
+        env:
+          ONE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          # python3 em vez de yq: o yq vem na imagem do runner hoje, mas e
+          # uma ferramenta de terceiro que a imagem pode tirar. python3 com
+          # PyYAML e garantido. Mesma licao do kubelogin.
+          all="$(python3 -c 'import json,yaml,sys; json.dump(yaml.safe_load(open("apps/releases.yaml"))["releases"], sys.stdout)')"
+          if [[ -n "$ONE" ]]; then
+            matrix="$(jq -c --arg r "$ONE" '[.[] | select(.release == $r)]' <<<"$all")"
+            if [[ "$matrix" == "[]" ]]; then
+              echo "::error::release '$ONE' nao esta em apps/releases.yaml" >&2
+              jq -r '.[].release' <<<"$all" >&2
+              exit 1
+            fi
+          else
+            matrix="$all"
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "- \(.release) -> \(.namespace) (\(.values))"' <<<"$matrix" \
+            >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
+    needs: plan
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 30
+    strategy:
+      # Sem fail-fast: uma release que falha nao deve cancelar o upgrade das
+      # outras, que sao produtos independentes.
+      fail-fast: false
+      # max-parallel 1: releases do mesmo produto costumam dividir banco e no.
+      # Tres helm --atomic --wait ao mesmo tempo disputariam o surge de
+      # memoria do no e um deles seria evicted no meio do rollout.
+      max-parallel: 1
+      matrix:
+        app: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # Por release, nao global: um deploy de uma release nao deve esperar na fila
+    # de um deploy de simplaca-api.
+    concurrency:
+      group: aks-deploy-${{ matrix.app.release }}
+      cancel-in-progress: false
+    env:
+      RELEASE: ${{ matrix.app.release }}
+      NAMESPACE: ${{ matrix.app.namespace }}
+      VALUES: ${{ matrix.app.values }}
     steps:
-      # Em workflow_call o job roda no contexto do repo chamador, entao um
-      # checkout sem argumentos clonaria a aplicacao. Os charts e os values
-      # estao aqui, logo o checkout e sempre explicito deste repo.
       - uses: actions/checkout@v4
         with:
           repository: clemeson/byteflip-infra
@@ -81,18 +131,24 @@ jobs:
           INPUT_TAG: ${{ inputs.image_tag }}
         run: |
           test "$(kubectl config current-context)" = personal-prod
+          test -f "$VALUES"
+          # Quem decide se a release TEM migracao e o values dela; quem
+          # decide se ESTE deploy deve roda-la e o caminho tomado abaixo.
+          # Forcar true para todo mundo quebraria uma release sem Prisma, que nao tem
+          # migration.command -- o chart da fail de proposito nesse caso.
+          has_migration="$(python3 -c 'import yaml,sys,json; print(json.dumps(bool((yaml.safe_load(open(sys.argv[1])).get("migration") or {}).get("enabled", False))))' "$VALUES")"
           if [[ -n "$INPUT_TAG" ]]; then
             # Imagem nova: a migracao roda antes dos pods trocarem.
             echo "IMAGE_REPOSITORY=$INPUT_REPOSITORY" >> "$GITHUB_ENV"
             echo "IMAGE_TAG=$INPUT_TAG" >> "$GITHUB_ENV"
-            echo "MIGRATE=true" >> "$GITHUB_ENV"
+            echo "MIGRATE=$has_migration" >> "$GITHUB_ENV"
             echo "DESCRIPTION=image=${INPUT_TAG:0:12} run=$GITHUB_RUN_ID" >> "$GITHUB_ENV"
           else
             # So a configuracao mudou. A imagem vem do release vivo, e a
             # migracao fica desligada: a imagem nao muda, logo o schema que
             # ela espera nao muda.
             values="$(helm get values "$RELEASE" --namespace "$NAMESPACE" -o json)" || {
-              echo "No $RELEASE release yet. Publish an image from simplaca-backend first." >&2
+              echo "::error::release $RELEASE ainda nao existe. Publique uma imagem pelo repo da aplicacao primeiro." >&2
               exit 1
             }
             echo "IMAGE_REPOSITORY=$(jq -re .image.repository <<<"$values")" >> "$GITHUB_ENV"

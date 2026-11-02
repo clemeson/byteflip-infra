@@ -90,3 +90,20 @@ migration:
 
 volumes: []
 volumeMounts: []
+
+# ---------------------------------------------------------------------------
+# Onde o pod pode rodar.
+#
+# nodeSelector escolhe o no; tolerations permitem o no TAINTADO. Os dois sao
+# necessarios juntos num pool dedicado: sem o nodeSelector o pod pode cair em
+# qualquer no, e sem a toleration ele nao entra no pool taintado e fica
+# Pending para sempre.
+#
+# Vale tambem para o Job de migracao: ele usa a mesma imagem e precisa das
+# mesmas rotas de rede que o app.
+#
+# Vazio por default: nenhuma release do cluster usa pool dedicado hoje.
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+affinity: {}
