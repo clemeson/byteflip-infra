@@ -53,6 +53,10 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - uses: azure/setup-kubectl@v4
       - uses: azure/use-kubelogin@v1
+        with:
+          # Versao fixa de proposito: sem ela o action resolve "latest"
+          # pela API do GitHub e falha sem GITHUB_TOKEN.
+          kubelogin-version: v0.2.22
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.3
