@@ -90,3 +90,34 @@ variable "external_secrets_service_account" {
   type        = string
   default     = "external-secrets"
 }
+
+# Repos de aplicacao, alem do simplaca, autorizados a publicar imagem e
+# implantar via OIDC. A chave e so o nome usado no federated credential; o
+# valor e o owner/repo, que vai literalmente para o subject do token.
+#
+# O simplaca ficou nos recursos nomeados (github_build/github_deploy) porque
+# dobra-los para ca exigiria `terraform state mv`. Vale fazer num momento
+# calmo, nao junto de um apply que cria node pool.
+variable "github_app_repositories" {
+  description = "Extra GitHub owner/repository entries allowed to build and deploy via OIDC."
+  type        = map(string)
+  default = {
+    zisp-api       = "clemeson/zisp-api"
+    zisp-vpn-api   = "clemeson/zisp-vpn-api"
+    zisp-super-api = "clemeson/zisp-super-api"
+  }
+}
+
+# Desligado por default: a quota regional de vCPU esta esgotada pelos dois nos
+# do pool system. Ligue depois que o aumento for aprovado.
+variable "zisp_node_pool_enabled" {
+  description = "Create the dedicated ZISP node pool. Requires regional vCPU quota headroom."
+  type        = bool
+  default     = false
+}
+
+variable "zisp_node_vm_size" {
+  description = "SKU of the dedicated ZISP node pool. Must fit Postgres, two Redis and three APIs."
+  type        = string
+  default     = "Standard_D2as_v7"
+}

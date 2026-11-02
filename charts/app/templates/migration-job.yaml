@@ -22,6 +22,16 @@ spec:
         app: {{ include "app.name" . }}-migrate
     spec:
       restartPolicy: Never
+      # Mesmo destino do Deployment: se o banco so e alcancavel do no da VPN,
+      # a migracao tambem precisa rodar la.
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

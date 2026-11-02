@@ -1,0 +1,5 @@
+apiVersion: v2
+name: vpn-server
+description: Servidor L2TP para os Mikrotik, terminando os tuneis num no do AKS
+type: application
+version: 0.1.0

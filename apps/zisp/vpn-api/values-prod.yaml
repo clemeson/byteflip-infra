@@ -1,0 +1,170 @@
+# zisp-vpn-api (era `api-vpn` no Flux do zisp-k8s).
+# Ponte entre o banco e o xl2tpd: cria/remove usuario no chap-secrets e le
+# as conexoes ppp ativas.
+#
+# E o unico servico do ZISP amarrado ao HOST, e e por isso que a decisao do
+# no da VPN decide o destino desta release. Ver apps/zisp/README.md.
+nameOverride: zisp-vpn-api
+
+image:
+  repository: ""
+  tag: ""
+
+containerPort: 3000
+portEnvName: API_PORT
+
+# Recreate, nao RollingUpdate. Dois pods escrevendo o mesmo
+# /etc/ppp/chap-secrets ao mesmo tempo e corrida de escrita, e o arquivo e
+# reescrito inteiro no delete (fs.writeFileSync do filtrado). Isso ja foi
+# causa de incidente -- usuarios VPN apagados.
+#
+# ATENCAO: no Flux antigo isto estava ausente e herdava RollingUpdate com
+# maxSurge 1, ou seja a corrida existia em TODO deploy por ~30s.
+replicas: 1
+strategy:
+  type: Recreate
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 112Mi
+  limits:
+    cpu: 200m
+    memory: 224Mi
+
+autoscaling:
+  enabled: false
+
+probes:
+  enabled: true
+  path: /health
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Unica das tres releases com pinning, e e obrigatorio, nao otimizacao: os
+# hostPath abaixo sao arquivos do no que roda o xl2tpd. Num no sem VPN o pod
+# sobe, nao acha chap-secrets e responde erro em toda rota -- ou pior, cria o
+# arquivo vazio e a conciliacao conclui que nao ha nenhum usuario no servidor.
+#
+# Enquanto o pool `zisp` nao existir este pod fica Pending, e isso e um
+# fail-safe, nao um defeito: ele NAO deve subir antes da decisao da VPN estar
+# tomada. Ver apps/zisp/README.md.
+nodeSelector:
+  byteflip.dev/workload: zisp
+tolerations:
+  - key: byteflip.dev/workload
+    operator: Equal
+    value: zisp
+    effect: NoSchedule
+
+env:
+  configMap:
+    enabled: true
+    data:
+      NODE_ENV: "production"
+      # Caminho DENTRO do PVC compartilhado com o vpn-server, nao /etc/ppp
+      # do container. Ver o bloco de volumes no fim do arquivo.
+      CHAP_SECRETS_PATH: "/etc/ppp-data/chap-secrets"
+      CONNECTIONS_STATE_PATH: "/var/run/ppp/connections.json"
+      CONCILIATION_CRON: "0 */6 * * *"
+
+      # ---------------------------------------------------------------
+      # Topologia da VPN. NAO sao segredo, e e exatamente por isso que
+      # ficam aqui: precisam ser visiveis e revisaveis em PR.
+      #
+      # Fixados porque o codigo tem fallback hardcoded e ele esta ERRADO
+      # para este cluster (vpn-clients.service.ts:13-17):
+      #   VPN_IP_RANGE_START    -> 10.231.144.10
+      #   VPN_SERVER_PRIVATE_IP -> 10.231.144.1
+      #   VPN_SERVER            -> 44.194.107.255  (EIP antigo da AWS)
+      #
+      # Faltando a chave o app NAO quebra: ele distribui endereco de
+      # 10.231.144.0/22, que nao existe no pool do xl2tpd
+      # (charts/vpn-server/values.yaml). O Mikrotik recebe IP valido na
+      # resposta da API, fecha o tunel e nunca roteia -- e nada no log diz
+      # por que. Declarar aqui e o que impede isso.
+      # ---------------------------------------------------------------
+      VPN_IP_RANGE_START: "10.19.25.10"
+      VPN_IP_RANGE_END: "10.19.27.254"
+      VPN_SERVER_PRIVATE_IP: "10.19.25.1"
+
+      # PENDENTE: o IP publico do Service do vpn-server. E este valor que a
+      # API devolve ao cliente como `vpnServerIp` e que vai para a config de
+      # cada Mikrotik, logo tem de bater com o azurerm_public_ip.vpn.
+      #
+      # Preencher DEPOIS do apply em terraform/aks/prod, com:
+      #   terraform -chdir=terraform/aks/prod output -raw vpn_public_ip
+      # Deixado vazio de proposito: o fallback do codigo e o EIP da AWS, e
+      # um valor errado aqui e pior que um valor ausente.
+      VPN_SERVER: ""
+
+      # DNS interno: o vpn-api chama o zisp-api de volta nos hooks.
+      ZISP_API_INTERNAL_URL: "http://zisp-api-svc"
+  secret:
+    enabled: true
+    name: zisp-vpn-api-env
+    # O banco antigo do vpn-api NAO EXISTE MAIS: o projeto Supabase
+    # tvzkhharhvdjqilcvkhe nao responde em nenhuma regiao do pooler
+    # (`tenant/user not found`), e o host direto nao resolve. A tabela
+    # vpn_clients -- fonte da verdade do chap-secrets -- foi perdida.
+    #
+    # Nao e bloqueio: o repo tem prisma/migrations, e o Job de pre-upgrade
+    # recria o schema num banco vazio. Nao havendo cliente ativo, nao ha dado
+    # a recuperar, so a recadastrar.
+    #
+    # Recomendado: usar o MESMO projeto do zisp-api com schema separado
+    # (`...pooler.supabase.com:5432/postgres?schema=vpn&connection_limit=5`)
+    # em vez de criar um projeto novo. Um projeto, uma conta, um lugar para
+    # somar connection_limit -- e os dois bancos nunca se cruzaram, cada app
+    # tem seu proprio Prisma Client.
+
+# Sem ingress: so o zisp-api fala com ele, por DNS interno
+# (zisp-vpn-api-svc). Expor isto na internet daria a quem achasse a URL o
+# poder de criar usuario de VPN.
+ingress:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Volumes: um PVC compartilhado e um hostPath, cada um pelo motivo certo.
+#
+# chap-secrets -> PVC `data-vpn-server-0`, o MESMO que o release vpn-server
+#   cria pelo volumeClaimTemplate. Azure Disk e RWO, e RWO permite varios pods
+#   no MESMO no -- que e o caso, os dois tem nodeSelector do pool `zisp`.
+#
+#   Era hostPath em /etc/ppp/chap-secrets, como na VPS. Trocado porque no AKS
+#   o /etc do no NAO sobrevive a reimagem do node pool (upgrade de node image,
+#   scale, reconcile): a base de usuarios seria perdida e todos os tuneis
+#   cairiam ate a conciliacao reescrever do banco -- e o CONCILIATION_CRON e
+#   de 6 em 6 horas. No PVC isso deixa de acontecer.
+#
+# ppp-run -> hostPath, e aqui hostPath e o CERTO, nao uma concessao. E o
+#   connections.json que os hooks ip-up/ip-down escrevem, em /var/run, que e
+#   tmpfs: o conteudo DEVE desaparecer no boot. Guardar sessao de ppp morta num
+#   disco seria o bug, nao a correcao.
+# ---------------------------------------------------------------------------
+volumes:
+  - name: chap-secrets
+    persistentVolumeClaim:
+      claimName: data-vpn-server-0
+  - name: ppp-run
+    hostPath:
+      path: /var/run/ppp
+      type: DirectoryOrCreate
+
+volumeMounts:
+  - name: chap-secrets
+    mountPath: /etc/ppp-data
+  - name: ppp-run
+    mountPath: /var/run/ppp
+
+migration:
+  enabled: true
+  command: ["npx", "prisma", "migrate", "deploy"]

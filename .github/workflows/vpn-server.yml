@@ -1,0 +1,95 @@
+# Constroi e publica a imagem do servidor L2TP, e implanta o release.
+#
+# Separado do deploy.yml porque e outra coisa: deploy.yml e um loop sobre
+# apps/releases.yaml usando charts/app, e o vpn-server nao e uma aplicacao
+# HTTP -- tem chart proprio, imagem construida aqui e um PVC com estado.
+# Forcar os dois no mesmo workflow faria charts/app crescer para suportar
+# hostNetwork e privileged, que e exatamente o que ele nao deve ter.
+#
+# Nao roda em todo push: so quando a imagem ou o chart mudam, ou a mao. Um
+# `helm upgrade` daqui reinicia o pod e DERRUBA todos os tuneis -- isso nao
+# pode ser efeito colateral de mexer noutra coisa.
+name: Deploy VPN server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - images/vpn-server/**
+      - charts/vpn-server/**
+      - .github/workflows/vpn-server.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aks-vpn-server
+  cancel-in-progress: false
+
+env:
+  RELEASE: vpn-server
+  NAMESPACE: zisp
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and push image
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          : "${ACR_NAME:?Set ACR_NAME in repository variables}"
+          az acr login --name "$ACR_NAME"
+          image="$ACR_NAME.azurecr.io/vpn-server:$GITHUB_SHA"
+          docker build --tag "$image" images/vpn-server
+          docker push "$image"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Install kubectl and kubelogin
+        run: |
+          az aks install-cli \
+            --install-location "$RUNNER_TEMP/bin/kubectl" \
+            --kubelogin-install-location "$RUNNER_TEMP/bin/kubelogin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Configure AKS
+        run: |
+          echo "KUBECONFIG=$RUNNER_TEMP/aks-kubeconfig" >> "$GITHUB_ENV"
+          az aks get-credentials --resource-group personal-aks-eastus2-prod \
+            --name personal-prod --file "$RUNNER_TEMP/aks-kubeconfig" --overwrite-existing
+          KUBECONFIG="$RUNNER_TEMP/aks-kubeconfig" kubelogin convert-kubeconfig -l azurecli
+      # O IP e o RG saem do Terraform, nao de um valor digitado no chart: e o
+      # mesmo endereco que esta gravado em cada Mikrotik, e nao pode divergir.
+      - name: Resolve the VPN public IP
+        run: |
+          ip=$(az network public-ip show \
+            --resource-group personal-aks-eastus2-prod \
+            --name personal-prod-vpn-l2tp \
+            --query ipAddress -o tsv)
+          test -n "$ip"
+          echo "VPN_IP=$ip" >> "$GITHUB_ENV"
+      - name: Upgrade Helm release
+        run: |
+          test "$(kubectl config current-context)" = personal-prod
+          helm upgrade --install "$RELEASE" charts/vpn-server \
+            --namespace "$NAMESPACE" \
+            --set-string image.repository="${IMAGE%:*}" \
+            --set-string image.tag="$GITHUB_SHA" \
+            --set-string service.loadBalancerIP="$VPN_IP" \
+            --set-string service.loadBalancerResourceGroup=personal-aks-eastus2-prod \
+            --description "image=${GITHUB_SHA:0:12} run=$GITHUB_RUN_ID" \
+            --atomic --wait --timeout 10m --history-max 20
+          helm status "$RELEASE" --namespace "$NAMESPACE"
+          echo "vpn-server -> $VPN_IP:1701/udp (image ${GITHUB_SHA:0:12})" >> "$GITHUB_STEP_SUMMARY"

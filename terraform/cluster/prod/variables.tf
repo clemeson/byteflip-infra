@@ -45,6 +45,7 @@ variable "application_namespaces" {
   default = {
     simplaca = "simplaca"
     postlet  = "postlet"
+    zisp     = "zisp"
   }
 }
 
@@ -103,20 +104,7 @@ variable "external_secrets_resources" {
   }
 }
 
-# Um segredo no Key Vault por release, com um objeto JSON dentro; cada chave
-# do JSON vira uma chave do Secret do Kubernetes.
-variable "app_secrets" {
-  description = "Releases that receive a Secret from Key Vault via External Secrets."
-  type = list(object({
-    name           = string
-    namespace      = string
-    secretName     = string
-    keyVaultSecret = string
-  }))
-  default = [{
-    name           = "simplaca-api"
-    namespace      = "simplaca"
-    secretName     = "simplaca-api-env"
-    keyVaultSecret = "simplaca-api-env"
-  }]
-}
+# A lista de releases que recebem Secret saia daqui e passou a vir de
+# apps/releases.yaml (local.app_secrets em main.tf), que e o mesmo arquivo que
+# alimenta o matrix do workflow de deploy. Mantinha-se a mesma lista em dois
+# lugares e nada garantia que batessem.

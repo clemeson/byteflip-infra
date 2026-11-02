@@ -1,0 +1,78 @@
+# Chart separado do charts/app de proposito. O charts/app e "aplicacao HTTP
+# stateless": nao tem hostNetwork, nem securityContext, nem montagem de
+# /lib/modules, e nao deve ter -- sao exatamente os privilegios que um pod de
+# aplicacao nunca precisa pedir.
+
+nameOverride: vpn-server
+
+image:
+  # Construida em images/vpn-server. Nao existe imagem oficial de xl2tpd.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# Rede da VPN
+#
+# ATENCAO ao /22: 10.19.25.0/22 e CIDR INVALIDO -- o endereco de rede de um
+# /22 tem o terceiro octeto multiplo de 4, logo 10.19.25.0/22 e normalizado em
+# silencio para 10.19.24.0/22 por quem o consome. O mesmo erro ja tinha sido
+# corrigido no gerador de script Mikrotik.
+#
+# A VNet do cluster e 10.80.0.0/16 e os Services 10.81.0.0/16, justamente para
+# nao encostar na faixa abaixo.
+# ---------------------------------------------------------------------------
+network: 10.19.24.0/22
+gateway: 10.19.25.1
+poolStart: 10.19.25.10
+poolEnd: 10.19.27.254
+
+dns:
+  - 8.8.8.8
+  - 8.8.4.4
+
+# MTU/MRU reduzidos: o encapsulamento L2TP come bytes e, sem folga, pacote
+# grande fragmenta ou e descartado no caminho.
+mtu: 1410
+mru: 1450
+
+service:
+  port: 1701
+  # IP estatico declarado no Terraform (azurerm_public_ip.vpn). Sem fixar, uma
+  # recriacao do Service sorteia outro IP e todo Mikrotik tem de ser visitado
+  # de novo.
+  loadBalancerIP: ""
+  # Nao e otimizacao, e obrigatorio: no default (Cluster) o kube-proxy faz
+  # SNAT e o pppd veria o IP do NO em vez do IP de cada Mikrotik -- todos os
+  # peers com a mesma origem.
+  externalTrafficPolicy: Local
+  # Obrigatorio porque o azurerm_public_ip.vpn vive no RG do cluster, nao no
+  # node resource group (MC_*). Sem isto o Service fica <pending> para sempre,
+  # e sem mensagem de erro util.
+  loadBalancerResourceGroup: ""
+
+persistence:
+  # managed-csi = Azure Disk. RWO, e os dois pods (este e o zisp-vpn-api) ficam
+  # no mesmo no, o que RWO permite.
+  storageClass: managed-csi
+  size: 1Gi
+  # Diretorio do PVC. O entrypoint cria o chap-secrets aqui se ausente e
+  # aponta /etc/ppp/chap-secrets para ele; o zisp-vpn-api le o caminho direto
+  # via CHAP_SECRETS_PATH.
+  mountPath: /etc/ppp-data
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nodeSelector:
+  byteflip.dev/workload: zisp
+tolerations:
+  - key: byteflip.dev/workload
+    operator: Equal
+    value: zisp
+    effect: NoSchedule

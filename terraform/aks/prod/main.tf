@@ -254,3 +254,126 @@ resource "azurerm_federated_identity_credential" "external_secrets" {
   issuer                    = azurerm_kubernetes_cluster.main.oidc_issuer_url
   subject                   = "system:serviceaccount:${var.external_secrets_namespace}:${var.external_secrets_service_account}"
 }
+
+# ---------------------------------------------------------------------------
+# Node pool dedicado do ZISP
+#
+# Existe por tres razoes que se somam, nenhuma delas "organizacao":
+#
+#  1. o zisp-vpn-api monta /etc/ppp/chap-secrets por hostPath -- so funciona
+#     no no que termina os tuneis L2TP;
+#  2. o zisp-api precisa da rota para 10.19.24.0/22, que so existe nesse no;
+#  3. Postgres e Redis do ZISP usam PVC Azure Disk, que e RWO e so monta onde
+#     o disco esta anexado.
+#
+# O taint e a metade que importa: sem ele o scheduler poderia colocar o
+# simplaca-api aqui e disputar a memoria do no da VPN. Com ele, so entra quem
+# declara a toleration -- e so as releases do ZISP declaram.
+#
+# QUOTA: a quota regional de vCPU em eastus2 esta inteira consumida pelos dois
+# nos do pool system (2 x Standard_D2as_v7 = 4 vCPU). Este pool NAO sobe antes
+# de um aumento de quota aprovado, e e por isso que ele nasce desligado.
+# Depois do aumento: zisp_node_pool_enabled = true no tfvars.
+# ---------------------------------------------------------------------------
+resource "azurerm_kubernetes_cluster_node_pool" "zisp" {
+  count = var.zisp_node_pool_enabled ? 1 : 0
+
+  name                  = "zisp"
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
+  vm_size               = var.zisp_node_vm_size
+  node_count            = 1
+  auto_scaling_enabled  = false
+  os_disk_size_gb       = 64
+  vnet_subnet_id        = azurerm_subnet.nodes.id
+
+  node_labels = {
+    "byteflip.dev/workload" = "zisp"
+  }
+
+  # Formato chave=valor:efeito. Tem que casar exatamente com a toleration dos
+  # values em apps/zisp/*/values-prod.yaml.
+  node_taints = ["byteflip.dev/workload=zisp:NoSchedule"]
+
+  upgrade_settings {
+    max_surge = "10%"
+  }
+
+  tags = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# Credenciais federadas das aplicacoes ZISP
+#
+# O `subject` do token do GitHub e comparado como string LITERAL pelo Entra:
+# nao ha curinga, entao e uma credencial por repo e por entrada. Build usa
+# ref:refs/heads/main; deploy usa environment:production, que e o que faz o
+# environment do GitHub valer como fronteira de verdade.
+#
+# Reaproveitar as identidades github_build/github_deploy do simplaca em vez de
+# criar um par por produto e uma escolha com custo: o AcrPush e escopado no
+# REGISTRY, nao por repositorio de imagem, logo o CI do zisp consegue
+# sobrescrever a tag de uma imagem do simplaca. Para um operador unico o custo
+# e aceitavel; com times separados, troque por identidade por produto + scope
+# maps do ACR.
+# ---------------------------------------------------------------------------
+resource "azurerm_federated_identity_credential" "app_build" {
+  for_each = var.github_app_repositories
+
+  name                      = "github-${each.key}-build-main"
+  user_assigned_identity_id = azurerm_user_assigned_identity.github_build.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = "https://token.actions.githubusercontent.com"
+  subject                   = "repo:${each.value}:ref:refs/heads/main"
+}
+
+resource "azurerm_federated_identity_credential" "app_deploy" {
+  for_each = var.github_app_repositories
+
+  name                      = "github-${each.key}-deploy-prod"
+  user_assigned_identity_id = azurerm_user_assigned_identity.github_deploy.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = "https://token.actions.githubusercontent.com"
+  subject                   = "repo:${each.value}:environment:production"
+}
+
+# ---------------------------------------------------------------------------
+# IP publico da VPN L2TP
+#
+# Declarado aqui, no NOSSO resource group, e nao deixado para o Service criar:
+# um IP criado pelo Service morre com ele, e recriar o Service sortearia outro
+# endereco -- o que significa visitar cada Mikrotik em campo outra vez. Esse e
+# o tipo de custo que nao se paga duas vezes.
+#
+# Fica separado do IP do Traefik (135.18.210.136): aquele e HTTP/HTTPS, este e
+# UDP 1701. Um Service nao compartilha frontend com o outro.
+#
+# Como o IP NAO esta no node resource group (MC_*), duas coisas sao
+# necessarias, e falta de qualquer uma deixa o Service em <pending> sem erro
+# claro:
+#   1. a identidade do control plane precisa de Network Contributor nele;
+#   2. o Service precisa da anotacao
+#      service.beta.kubernetes.io/azure-load-balancer-resource-group
+#      apontando para este RG (ver charts/vpn-server/values.yaml).
+# ---------------------------------------------------------------------------
+resource "azurerm_public_ip" "vpn" {
+  name                = "${var.cluster_name}-vpn-l2tp"
+  resource_group_name = azurerm_resource_group.aks.name
+  location            = azurerm_resource_group.aks.location
+
+  # Static, nao Dynamic: o endereco vai para a configuracao de cada CPE. Um IP
+  # Dynamic muda e derruba todos os tuneis de uma vez.
+  allocation_method = "Static"
+
+  # Standard e obrigatorio: o load_balancer_sku do cluster e standard, e as
+  # SKUs nao se misturam num mesmo Load Balancer.
+  sku = "Standard"
+
+  tags = local.tags
+}
+
+resource "azurerm_role_assignment" "aks_vpn_ip" {
+  scope                = azurerm_public_ip.vpn.id
+  role_definition_name = "Network Contributor"
+  principal_id         = azurerm_user_assigned_identity.aks_control_plane.principal_id
+  principal_type       = "ServicePrincipal"
+}

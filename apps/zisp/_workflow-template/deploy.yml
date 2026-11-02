@@ -1,0 +1,83 @@
+# Molde do .github/workflows/deploy.yml de uma aplicacao ZISP.
+#
+# Copie para o repo da aplicacao e troque as DUAS ocorrencias de APP_NAME
+# (uma no nome da imagem, uma no `release`). Nada mais muda entre os repos --
+# release, namespace e values vivem em apps/releases.yaml deste repo.
+#
+# O que sai do deploy.yml antigo (que empurrava para a VPS k3s-gp, apagada):
+#   - sshpass / VPS_PASSWORD   a Azure nao aceita senha no SSH
+#   - o passo que recriava o Secret <app>-env a cada deploy
+#     (agora: Key Vault + External Secrets Operator)
+#   - checkout do zisp-k8s + sed na tag + commit
+#     (agora: a tag e o SHA, passado por workflow_call)
+#   - login no ECR
+#     (agora: ACR por OIDC, sem credencial de longa duracao)
+#
+# Pre-requisitos no repo da aplicacao, em Settings:
+#   Variables: ACR_NAME, AZURE_BUILD_CLIENT_ID, AZURE_DEPLOY_CLIENT_ID,
+#              AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#              (valores IDENTICOS aos do simplaca-backend)
+#   Environment `production`, com branch protection em main
+#     Isto nao e decorativo: o subject do token de deploy e
+#     repo:<owner>/<repo>:environment:production, logo e o environment que
+#     faz a credencial federada valer.
+#   Secrets: nenhum. Nao ha segredo neste workflow.
+name: Deploy APP_NAME to AKS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: Existing ACR image SHA for rollback; leave blank to build main
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: APP_NAME-aks-main
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && inputs.image_sha == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_BUILD_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and push to ACR
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          : "${ACR_NAME:?Set ACR_NAME in repository variables}"
+          az acr login --name "$ACR_NAME"
+          image="$ACR_NAME.azurecr.io/APP_NAME:$GITHUB_SHA"
+          docker build --tag "$image" .
+          docker push "$image"
+          echo "Built: $image" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: build
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.build.result == 'success' || inputs.image_sha != '')
+    permissions:
+      contents: read
+      id-token: write
+    uses: clemeson/byteflip-infra/.github/workflows/deploy.yml@main
+    with:
+      # Tem que casar com um `release` de apps/releases.yaml, senao o job
+      # plan falha dizendo quais existem.
+      release: APP_NAME
+      image_repository: ${{ vars.ACR_NAME }}.azurecr.io/APP_NAME
+      image_tag: ${{ inputs.image_sha || github.sha }}

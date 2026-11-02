@@ -38,3 +38,16 @@ output "external_secrets_client_id" {
   description = "Client ID the External Secrets ServiceAccount annotates for workload identity."
   value       = azurerm_user_assigned_identity.external_secrets.client_id
 }
+
+output "vpn_public_ip" {
+  description = "Endereco que vai na configuracao L2TP de cada Mikrotik."
+  value       = azurerm_public_ip.vpn.ip_address
+}
+
+output "vpn_service_values" {
+  description = "Valores a passar para o release do charts/vpn-server."
+  value = {
+    loadBalancerIP            = azurerm_public_ip.vpn.ip_address
+    loadBalancerResourceGroup = azurerm_resource_group.aks.name
+  }
+}

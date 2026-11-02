@@ -3,6 +3,30 @@ locals {
   aks_aad_server_id = "6dae42f8-4368-4678-94ff-3960e28e3630"
 
   addon_namespaces = toset(["traefik", "cert-manager", "reloader"])
+
+  # Mesmo arquivo que o workflow de deploy le para montar o matrix. Uma
+  # release acrescentada lá ganha o ExternalSecret aqui no proximo apply,
+  # sem editar Terraform.
+  #
+  # Nao ha validacao cruzada automatica: se o namespace da release nao
+  # estiver em application_namespaces, o ExternalSecret falha no apply com
+  # "namespaces not found" -- o assert abaixo antecipa isso com uma mensagem
+  # que diz o que fazer.
+  releases = yamldecode(file("${path.module}/../../../apps/releases.yaml")).releases
+
+  app_secrets = [
+    for r in local.releases : {
+      name           = r.release
+      namespace      = r.namespace
+      secretName     = r.keyVaultSecret
+      keyVaultSecret = r.keyVaultSecret
+    }
+  ]
+
+  releases_without_namespace = [
+    for r in local.releases : r.release
+    if !contains(keys(var.application_namespaces), r.namespace)
+  ]
 }
 
 data "azurerm_kubernetes_cluster" "main" {
@@ -197,7 +221,7 @@ resource "helm_release" "app_secrets" {
       name      = "external-secrets"
       namespace = local.external_secrets_namespace
     }
-    releases = var.app_secrets
+    releases = local.app_secrets
   })]
 
   atomic  = true
@@ -205,4 +229,17 @@ resource "helm_release" "app_secrets" {
   timeout = 300
 
   depends_on = [helm_release.external_secrets, kubernetes_namespace.applications]
+
+  # precondition e nao um bloco `check`: check so emite aviso e o apply
+  # segue, criando ExternalSecret num namespace inexistente. Aqui o plan
+  # falha, que e o que se quer.
+  lifecycle {
+    precondition {
+      condition = length(local.releases_without_namespace) == 0
+      error_message = format(
+        "apps/releases.yaml declara a(s) release(s) %s num namespace fora de var.application_namespaces. Acrescente o namespace na variavel antes de aplicar.",
+        join(", ", local.releases_without_namespace)
+      )
+    }
+  }
 }

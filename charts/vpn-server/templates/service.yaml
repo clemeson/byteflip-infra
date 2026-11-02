@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vpn.name" . }}-svc
+  labels:
+    {{- include "vpn.labels" . | nindent 4 }}
+  {{- with .Values.service.loadBalancerResourceGroup }}
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ . | quote }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  # O Standard LB da Azure carrega so TCP e UDP. Serve para L2TP puro, que e
+  # UDP {{ .Values.service.port }} e nada mais. Se um dia entrar IPsec, ESP
+  # (protocolo 50) NAO passa por aqui: seria preciso NAT-T, ou seja ESP
+  # encapsulado em UDP 4500, mais UDP 500.
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- with .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  selector:
+    app: {{ include "vpn.name" . }}
+  ports:
+    - name: l2tp
+      protocol: UDP
+      port: {{ .Values.service.port }}
+      # hostNetwork: o pod escuta na porta do proprio no, logo targetPort e a
+      # mesma porta.
+      targetPort: {{ .Values.service.port }}

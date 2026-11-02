@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vpn.name" . }}-config
+  labels:
+    {{- include "vpn.labels" . | nindent 4 }}
+data:
+  # Portados de infra/ansible/roles/vpn/templates/*.j2. Mesmo conteudo, outra
+  # linguagem de template.
+  xl2tpd.conf: |
+    [global]
+    port = {{ .Values.service.port }}
+    listen-addr = 0.0.0.0
+
+    [lns default]
+    ip range = {{ .Values.poolStart }} - {{ .Values.poolEnd }}
+    local ip = {{ .Values.gateway }}
+    require chap = no
+    refuse pap = yes
+    require authentication = yes
+    name = l2tpd
+    pppoptfile = /etc/ppp/options.xl2tpd
+    length bit = yes
+    hidden bit = no
+    assign ip = yes
+
+  options.xl2tpd: |
+    ipcp-accept-local
+    ipcp-accept-remote
+    {{- range .Values.dns }}
+    ms-dns {{ . }}
+    {{- end }}
+    noccp
+    auth
+    idle 1800
+    mtu {{ .Values.mtu }}
+    mru {{ .Values.mru }}
+    nodefaultroute
+    proxyarp
+    connect-delay 0
+    # So MSCHAPv2: PAP manda a senha em claro e CHAP-MD5 e quebrado.
+    #
+    # Sem IPsec o trafego NAO e cifrado, so autenticado. Era assim na VPS e
+    # continua assim aqui -- com a diferenca de que agora atravessa de
+    # eastus2 ate o Brasil. Esta na lista de divida, em apps/zisp/README.md.
+    require-mschap-v2
+    refuse-pap
+    refuse-chap

@@ -1,0 +1,128 @@
+# StatefulSet, e nao DaemonSet.
+#
+# DaemonSet seria o reflexo natural para "um por no do pool", e foi a primeira
+# ideia -- mas DaemonSet com PVC quebra no dia em que o pool tiver dois nos:
+# Azure Disk e RWO, o segundo pod nao consegue anexar o volume e fica preso em
+# ContainerCreating sem explicacao obvia. StatefulSet com replicas 1 diz o que
+# a arquitetura realmente exige: existe UM terminador de tunel, com UM disco.
+#
+# E sobrevive a reimagem do no, que era o furo do Ansible: o pod e reagendado
+# no no novo e o disco reanexa.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vpn.name" . }}
+  labels:
+    {{- include "vpn.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ include "vpn.name" . }}-svc
+  selector:
+    matchLabels:
+      app: {{ include "vpn.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "vpn.name" . }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      # As interfaces ppp tem de nascer no netns do NO, nao do pod: e o que
+      # permite o nó rotear o trafego dos outros pods (zisp-api) para
+      # {{ .Values.network }}. Num netns proprio, as rotas morreriam com o pod.
+      hostNetwork: true
+      # Obrigatorio junto de hostNetwork: no default o pod passa a usar o
+      # resolver do no e para de resolver Service do cluster.
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: xl2tpd
+          image: "{{ required "image.repository e obrigatorio" .Values.image.repository }}:{{ required "image.tag e obrigatorio" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            # privileged, e nao uma lista de capabilities: o pppd precisa de
+            # /dev/ppp (char 108,0, que existe porque ppp_generic e builtin no
+            # kernel do no), o modprobe precisa de SYS_MODULE, o iptables e o
+            # sysctl precisam de NET_ADMIN, e o conjunto so funciona com o /dev
+            # do host visivel. Pedir menos daria falha em runtime, nao
+            # seguranca.
+            privileged: true
+          env:
+            - name: VPN_NETWORK
+              value: {{ .Values.network | quote }}
+            - name: VPN_GATEWAY
+              value: {{ .Values.gateway | quote }}
+            - name: CHAP_SECRETS
+              value: {{ include "vpn.chapSecrets" . | quote }}
+          ports:
+            - name: l2tp
+              protocol: UDP
+              containerPort: {{ .Values.service.port }}
+          # Nao ha /health: o processo nao fala HTTP. A sonda confere o que
+          # importa de verdade, que e o socket UDP aberto -- o mesmo check que
+          # o playbook fazia com `ss -ulnp | grep :1701` depois de aplicar.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "ss -ulnp | grep -q ':{{ .Values.service.port }}'"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "ss -ulnp | grep -q ':{{ .Values.service.port }}'"
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/xl2tpd/xl2tpd.conf
+              subPath: xl2tpd.conf
+            - name: config
+              mountPath: /etc/ppp/options.xl2tpd
+              subPath: options.xl2tpd
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+            # Estado volatil das sessoes: escrito pelos hooks ip-up/ip-down
+            # deste container, lido pelo zisp-vpn-api, que monta o mesmo
+            # caminho do no. hostPath aqui e correto -- /run e tmpfs, o
+            # conteudo DEVE desaparecer no boot.
+            - name: ppp-run
+              mountPath: /var/run/ppp
+            # modprobe carrega o .ko do host; sem isto nao ha o que carregar.
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "vpn.name" . }}-config
+        - name: ppp-run
+          hostPath:
+            path: /var/run/ppp
+            type: DirectoryOrCreate
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.persistence.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
