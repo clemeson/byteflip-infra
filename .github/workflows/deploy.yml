@@ -51,12 +51,15 @@ jobs:
           client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - uses: azure/setup-kubectl@v4
-      - uses: azure/use-kubelogin@v1
-        with:
-          # Versao fixa de proposito: sem ela o action resolve "latest"
-          # pela API do GitHub e falha sem GITHUB_TOKEN.
-          kubelogin-version: v0.2.22
+      # kubectl e kubelogin vem do proprio az, ja instalado no runner.
+      # Evita os actions azure/setup-kubectl e azure/use-kubelogin, que
+      # resolvem a versao "latest" pela API do GitHub e falham sem token.
+      - name: Install kubectl and kubelogin
+        run: |
+          az aks install-cli \
+            --install-location "$RUNNER_TEMP/bin/kubectl" \
+            --kubelogin-install-location "$RUNNER_TEMP/bin/kubelogin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.3

@@ -4,6 +4,15 @@ metadata:
   name: {{ include "app.name" . }}
   labels:
     {{- include "app.labels" . | nindent 4 }}
+  {{- if .Values.env.secret.enabled }}
+  annotations:
+    # O Secret vem do External Secrets Operator, nao deste release, entao o
+    # Helm nao tem como calcular um checksum dele. O Reloader observa o Secret
+    # e reinicia este Deployment quando o valor muda no Key Vault.
+    # A anotacao tem que ficar aqui, no metadata do Deployment: no pod
+    # template o Reloader nao a enxerga.
+    reloader.stakater.com/auto: "true"
+  {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
@@ -22,19 +31,11 @@ spec:
     metadata:
       labels:
         app: {{ include "app.name" . }}
-      {{- if or .Values.env.secret.enabled (and .Values.env.configMap.enabled .Values.env.configMap.data) }}
+      {{- if and .Values.env.configMap.enabled .Values.env.configMap.data }}
       annotations:
-        {{- if .Values.env.secret.enabled }}
-        # O Secret vem do External Secrets Operator, não deste release, então
-        # o Helm não tem como calcular um checksum dele. O Reloader observa o
-        # Secret e reinicia este Deployment quando o valor muda no Key Vault.
-        reloader.stakater.com/auto: "true"
-        {{- end }}
-        {{- if and .Values.env.configMap.enabled .Values.env.configMap.data }}
         # Sem isso, mudar uma env no ConfigMap não reinicia o pod e a
         # mudança só passa a valer no próximo deploy de imagem.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- end }}
       {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
