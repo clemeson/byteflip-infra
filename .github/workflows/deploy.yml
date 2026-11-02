@@ -44,7 +44,13 @@ jobs:
     environment: production
     timeout-minutes: 30
     steps:
+      # Em workflow_call o job roda no contexto do repo chamador, entao um
+      # checkout sem argumentos clonaria a aplicacao. Os charts e os values
+      # estao aqui, logo o checkout e sempre explicito deste repo.
       - uses: actions/checkout@v4
+        with:
+          repository: clemeson/byteflip-infra
+          ref: main
       - name: Log in to Azure with OIDC
         uses: azure/login@v3
         with:
